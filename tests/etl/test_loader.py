@@ -1,32 +1,48 @@
 import pytest
 import pandas as pd
-from src.etl.loader import load_excel_file, load_all_raw_files
+from src.etl.loader import load_excel_file, load_core_file, load_supplementary_file, load_all_raw_files
 
 
-def test_load_excel_file_success():
-    df = load_excel_file("data/raw/sample_companies.xlsx")
+def test_load_core_file_companies():
+    df = load_core_file("companies")
     assert isinstance(df, pd.DataFrame)
-    assert len(df) == 3
-    assert "company_name" in df.columns
+    assert "id" in df.columns
+    assert len(df) > 0
 
 
-def test_load_excel_file_missing_raises():
+def test_load_core_file_missing_raises():
     with pytest.raises(FileNotFoundError):
-        load_excel_file("data/raw/does_not_exist.xlsx")
+        load_core_file("does_not_exist")
+
+
+def test_load_supplementary_file_sectors():
+    df = load_supplementary_file("sectors")
+    assert isinstance(df, pd.DataFrame)
+    assert len(df) > 0
 
 
 def test_load_all_raw_files_returns_dict():
-    result = load_all_raw_files("data/raw")
+    result = load_all_raw_files()
     assert isinstance(result, dict)
-    assert "sample_companies" in result
+    assert "companies" in result
+    assert "sectors" in result
+    assert len(result) == 12
 
 
-def test_load_all_raw_files_missing_dir_raises():
-    with pytest.raises(FileNotFoundError):
-        load_all_raw_files("data/does_not_exist")
+@pytest.mark.parametrize("table_name", [
+    "companies", "profitandloss", "balancesheet", "cashflow",
+    "analysis", "documents", "prosandcons"
+])
+def test_all_core_tables_load_successfully(table_name):
+    df = load_core_file(table_name)
+    assert isinstance(df, pd.DataFrame)
+    assert len(df) > 0
 
 
-@pytest.mark.parametrize("column", ["company_id", "company_name", "ticker", "year"])
-def test_sample_file_has_expected_columns(column):
-    df = load_excel_file("data/raw/sample_companies.xlsx")
-    assert column in df.columns
+@pytest.mark.parametrize("table_name", [
+    "sectors", "stock_prices", "market_cap", "financial_ratios", "peer_groups"
+])
+def test_all_supplementary_tables_load_successfully(table_name):
+    df = load_supplementary_file(table_name)
+    assert isinstance(df, pd.DataFrame)
+    assert len(df) > 0
