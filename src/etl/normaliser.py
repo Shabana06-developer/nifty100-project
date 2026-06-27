@@ -3,6 +3,7 @@ normaliser.py
 Functions that clean/standardize messy raw data values.
 """
 import re
+import pandas as pd
 
 MONTH_MAP = {
     "JAN": "01", "FEB": "02", "MAR": "03", "APR": "04",
@@ -16,47 +17,104 @@ MONTH_MAP = {
 
 def normalize_year(value) -> str:
     """
-    Converts various financial-year labels into 'YYYY-MM' format.
-
-    Examples:
-        "Mar-23"      -> "2023-03"
-        "Mar 23"      -> "2023-03"
-        "March-2023"  -> "2023-03"
-        "2023"        -> "2023-03"   (assume March FY close if no month given)
-        "FY23"        -> "2023-03"
-        "Dec-22"      -> "2022-12"
-        "2023-03"     -> "2023-03"   (already normalised, pass through)
+    Converts standard financial-year labels into 'YYYY-MM' format.
+    Raises ValueError for anything that isn't a clean, standard fiscal year
+    (e.g. stub/interim reporting periods like 'Mar 2016 9m', or malformed
+    values like '2024.5'). TTM is a recognized special case (rolling window).
     """
     if value is None:
         raise ValueError("Year value cannot be None")
 
-    text = str(value).strip().upper().replace("-", " ")
-    text = re.sub(r"\s+", " ", text)
+    text = str(value).strip().upper()
 
-    # Already normalised: "2023 03"
-    match_already = re.match(r"^(\d{4})\s+(\d{2})$", text)
+    if text == "TTM":
+        return "TTM"
+
+    # Already normalised: "2023-03"
+    match_already = re.match(r"^(\d{4})-(\d{2})$", text)
     if match_already:
         return f"{match_already.group(1)}-{match_already.group(2)}"
 
-    text_no_fy = text.replace("FY", "").strip()
-
-    # "MAR 23" or "MARCH 2023" pattern
-    match_month_year = re.match(r"^([A-Z]+)\s*(\d{2,4})$", text_no_fy)
-    if match_month_year:
-        month_text, year_text = match_month_year.groups()
+    # "MAR-13" or "MAR-2013" (hyphen between month and year)
+    match_hyphen = re.match(r"^([A-Z]+)-(\d{2,4})$", text)
+    if match_hyphen:
+        month_text, year_text = match_hyphen.groups()
         if month_text in MONTH_MAP:
             year_num = int(year_text)
             year_num = year_num + 2000 if year_num < 100 else year_num
             return f"{year_num}-{MONTH_MAP[month_text]}"
 
-    # Plain year only, e.g. "2023" or "23"
-    match_year_only = re.match(r"^(\d{2,4})$", text_no_fy)
-    if match_year_only:
-        year_num = int(match_year_only.group(1))
-        year_num = year_num + 2000 if year_num < 100 else year_num
-        return f"{year_num}-03"  # assume March FY close
+    # "MAR 2023" or "MARCH 2023" (space, 4-digit year)
+    match_space4 = re.match(r"^([A-Z]+)\s+(\d{4})$", text)
+    if match_space4:
+        month_text, year_text = match_space4.groups()
+        if month_text in MONTH_MAP:
+            return f"{year_text}-{MONTH_MAP[month_text]}"
 
+    # "MAR 23" (space, 2-digit year) — not seen in your data yet, but cheap to support
+    match_space2 = re.match(r"^([A-Z]+)\s+(\d{2})$", text)
+    if match_space2:
+        month_text, year_text = match_space2.groups()
+        if month_text in MONTH_MAP:
+            year_num = int(year_text) + 2000
+            return f"{year_num}-{MONTH_MAP[month_text]}"
+
+    # "FY23" or "FY2023"
+    match_fy = re.match(r"^FY\s*(\d{2,4})$", text)
+    if match_fy:
+        year_num = int(match_fy.group(1))
+        year_num = year_num + 2000 if year_num < 100 else year_num
+        return f"{year_num}-03"
+
+    # Plain 4-digit year, e.g. "2013" -> assume March FY close
+    match_year_only = re.match(r"^(\d{4})$", text)
+    if match_year_only:
+        return f"{match_year_only.group(1)}-03"
+
+    # Anything else (e.g. "2024.5", "MAR 2016 9M", "MAR 2023 15") is a
+    # stub/interim period or malformed value — cannot be safely standardised.
     raise ValueError(f"Could not parse year from: {value!r}")
+
+
+def normalize_year_safe(value):
+    """
+    Wrapper around normalize_year() that never raises.
+    Returns (normalized_value_or_None, raw_value_if_failed_or_None).
+    """
+    try:
+        return normalize_year(value), None
+    except ValueError:
+        return None, str(value)
+
+
+def normalize_year_column(df: pd.DataFrame, year_col: str = "year"):
+    """
+    Applies normalize_year() to an entire column safely.
+    Returns (clean_df, rejected_df):
+      - clean_df: rows whose year normalized successfully
+      - rejected_df: original rows that failed, with a 'raw_year_value' column
+    """
+    df = df.copy()
+    normalized_values = []
+    raw_failed_values = []
+
+    for value in df[year_col]:
+        clean_value, failed_value = normalize_year_safe(value)
+        normalized_values.append(clean_value)
+        raw_failed_values.append(failed_value)
+
+    df["_normalized_year"] = normalized_values
+    df["_raw_year"] = raw_failed_values
+
+    rejected = df[df["_normalized_year"].isna()].copy()
+    rejected["raw_year_value"] = rejected["_raw_year"]
+    rejected = rejected.drop(columns=["_normalized_year", "_raw_year"])
+
+    clean = df[df["_normalized_year"].notna()].copy()
+    clean[year_col] = clean["_normalized_year"]
+    clean = clean.drop(columns=["_normalized_year", "_raw_year"])
+
+    return clean, rejected
 
 
 def normalize_ticker(value) -> str:
