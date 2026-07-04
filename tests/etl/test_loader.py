@@ -1,6 +1,7 @@
 import pytest
 import pandas as pd
-from src.etl.loader import load_excel_file, load_core_file, load_supplementary_file, load_all_raw_files
+
+from src.etl.loader import load_core_file, load_supplementary_file, load_all_raw_files
 
 
 def test_load_core_file_companies():
